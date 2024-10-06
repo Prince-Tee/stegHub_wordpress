@@ -35,6 +35,8 @@ In this project, I deployed a **WordPress** website with a **MySQL** database, u
 2. Select the **t3.medium** instance type for better performance (upgraded from t3.micro).
 3. Assign a security group with rules allowing inbound HTTP, SSH, and custom MySQL access.
 
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/lauch%20a%20redhart%20linux%20server%20on%20aws.PNG)
+
 ### 1.2 Launch Database Server EC2 Instance
 
 1. Launch another **Red Hat** EC2 instance.
@@ -42,136 +44,234 @@ In this project, I deployed a **WordPress** website with a **MySQL** database, u
 3. Assign a security group allowing MySQL access on port 3306 only from the web server’s private IP, and allow SSH access.
 
 ---
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20create%20db%20server.PNG)
 
-## STEP 2: CONFIGURE EBS VOLUMES FOR EACH INSTANCE
+## : CONFIGURE EBS VOLUMES FOR EACH INSTANCE
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/created%20three%20volumes%20with%2010%20gib%20each.PNG)
 
 ### 2.1 Attach and Partition EBS Volumes for the Web Server
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/attach%20each%20volume.PNG)
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/attach%20each%20volume%20using%20the%20availabilty%20zone%20of%20the%20web%20server%20instance.PNG)
 
 1. **Attach three EBS volumes** to the web server.
 2. SSH into the web server instance:
    ```bash
    ssh -i "your-key.pem" ec2-user@<Web-Server-Public-IP>
    ```
-
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/ssh%20into%20the%20redhart%20server%20using%20ec2-user.PNG)
 3. **List the available disks** to check the attached volumes:
    ```bash
    lsblk
    ```
 
-4. Partition the disks `/dev/nvme1n1`, `/dev/nvme2n1`, and `/dev/nvme3n1`, and make made them part of an LVM (Logical Volume Manager) setup as indicated by the `TYPE="LVM2_member"`.
+   ![sreenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/using%20lsblk%20to%20check%20the%20volumes.PNG)
 
-Next steps would be to create logical volumes and format them for use. Here's a summary of what you'll do next:
 
-### Step 1: Verify the Physical Volumes
+### Create Partitions
+ Use `gdisk` utility to create a single partition on each of the 3 disks
 
-Check if the new partitions were added as physical volumes (PVs) in LVM:
+```bash
+sudo gdisk /dev/nvme1n1
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/creating%20partitions.PNG)
+Follow the prompts to create the partition, then use `w` to write changes. Exit out of the `gdisk` console and do the same for the remaining disks.
+
+2. Verify partitions with:
+
+```bash
+lsblk
+```   
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/partition%20created.PNG)
+
+### Install LVM
+
+1. Install `lvm2` package:
+
+```bash
+sudo yum install lvm2
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/installing%20lvm2.PNG)
+2. Check for available partitions:
+
+```bash
+sudo lvmdiskscan
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/checking%20for%20available%20partition.PNG)
+
+### Create Physical Volumes
+
+Mark each of the 3 disks as physical volumes (PVs):
+
+```bash
+sudo pvcreate /dev/nvme1n1p1
+sudo pvcreate /dev/nvme2n1p1
+sudo pvcreate /dev/nvme3n1p1
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/Mark%20the%20partitions%20as%20physical%20volumes.PNG)
+Verify creation:
 
 ```bash
 sudo pvs
 ```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/verify%20that%20the%20pysical%20partition%20has%20been%20created.PNG)
 
-### Step 2: Create or Extend a Volume Group
+### Create or Extend a Volume Group
 
  To create a new volume group, use the following command:
 
 ```bash
 sudo vgcreate webdata-vg /dev/nvme1n1p1 /dev/nvme2n1p1 /dev/nvme3n1p1
 ```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/volume%20group%20webdata%20created%20for%20the%20three%20partition.PNG)
 
-Or, if you're adding them to an existing volume group (`webdata-vg` in your case), you can extend the volume group:
-
-```bash
-sudo vgextend webdata-vg /dev/nvme1n1p1 /dev/nvme2n1p1 /dev/nvme3n1p1
-```
-
-### Step 3: Create Logical Volumes
-
-You can create logical volumes (e.g., for `apps`, `logs`, etc.). For example, to create a logical volume for storing application data:
+Verify VG creation:
 
 ```bash
-sudo lvcreate -L 5G -n apps-lv webdata-vg
+sudo vgs
 ```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/verify%20that%20VGhas%20been%20created.PNG)
 
-You can repeat the process for different logical volumes as needed.
+### Create Logical Volumes
 
-### Step 4: Format the Logical Volumes
-
-After creating the logical volumes, you need to format them. For example, to format `apps-lv` as ext4:
+Create 2 logical volumes: `apps-lv` (use half of the PV size) and `logs-lv` (use the remaining space):
 
 ```bash
-sudo mkfs.ext4 /dev/webdata-vg/apps-lv
+sudo lvcreate -n apps-lv -L 14G webdata-vg
+sudo lvcreate -n logs-lv -L 14G webdata-vg
 ```
-
-You can replace `apps-lv` with other logical volumes you have created and format them as needed.
-
-### Step 5: Mount the Logical Volumes
-
-Create mount points and mount the logical volumes. For example:
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/create%20and%20verify%20that%20lvcreate%20forwebsite%20and%20logs.PNG)
+Verify Logical Volume creation:
 
 ```bash
-sudo mkdir /mnt/apps
-sudo mount /dev/webdata-vg/apps-lv /mnt/apps
+sudo lvs
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/create%20and%20verify%20that%20lvcreate%20forwebsite%20and%20logs.PNG)
+
+### Verify Setup
+
+```bash
+sudo vgdisplay -v   # View complete setup - VG, PV, and LV.
+sudo lsblk
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/verify%20and%20check%20the%20entire%20setup.PNG)
+
+### Format Logical Volumes
+
+Format the logical volumes with the ext4 filesystem:
+
+```bash
+sudo mkfs -t ext4 /dev/webdata-vg/apps-lv
+sudo mkfs -t ext4 /dev/webdata-vg/logs-lv
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/Format%20the%20logical%20volumes.PNG)
+
+
+## Create Directories
+
+Create directories to store website and log files:
+
+```bash
+sudo mkdir -p /var/www/html
+sudo mkdir -p /home/recovery/logs
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/create%20htmland%20recovery%20logs.PNG)
+
+### Mount Logical Volumes
+
+1. Mount `/var/www/html` on `apps-lv` logical volume:
+
+```bash
+sudo mount /dev/webdata-vg/apps-lv /var/www/html/
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/Mount%20the%20logical%20volumes%20and%20rsync.PNG)
+2. Backup log files before mounting:
+
+```bash
+sudo rsync -av /var/log/ /home/recovery/logs/
 ```
 
-To ensure the logical volumes are mounted at boot, you add them to the `/etc/fstab` file.
+3. Mount `/var/log` on `logs-lv` logical volume:
 
-### Steps:
-1. Open `/etc/fstab` for editing:
+```bash
+sudo mount /dev/webdata-vg/logs-lv /var/log
+```
 
-   ```bash
-   sudo vi /etc/fstab
-   ```
+4. Restore log files back:
 
-2. Add the following lines to mount the logical volumes for `/var/www/html` (for `apps-lv`) and `/var/log` (for `logs-lv`):
+```bash
+sudo rsync -av /home/recovery/logs/ /var/log
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/Mount%20the%20logical%20volumes.PNG)
+
+
+### Update /etc/fstab
+
+Use the UUID of the device to update the `/etc/fstab` file:
+
+```bash
+sudo blkid
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/sudo%20blkid.PNG)
+
+Edit `/etc/fstab`:
+
+```bash
+sudo vi /etc/fstab
+```
+
+
+2. Add the following lines (replace `<UUID>` with the actual UUID) for `/var/www/html` (for `apps-lv`) and `/var/log` (for `logs-lv`):
 
    ```bash
    UUID=608ae3b2-07d5-4e34-9cd3-669d8efda2eb /var/www/html ext4 defaults 0 0
    UUID=c34d3bfa-de12-4ca0-ae2c-4f12bc881925 /var/log ext4 defaults 0 0
    ```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/content%20of%20the%20sudo%20vi%20etcfstab.PNG)
 
 
-manually mount the new partitions without rebooting:
+### Test the Configuration
 
-   ```bash
-   sudo mount -a
-   ```
-This will ensure that your logical volumes are mounted properly
-### Step 6: Verify the Setup
-
-Finally, verify that the logical volumes are correctly mounted:
-
+Reload the daemon and test the configuration:
+. 
 ```bash
-df -h
+sudo mount -a
+sudo systemctl daemon-reload
+df -h   # Verify your setup.
 ```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/Test%20the%20configuration%20and%20reload%20the%20daemon.PNG)
+
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/verify%20set%20by%20running%20df%20-h.PNG)
 
 This will show the available space and confirm the mounted locations.
 
 
 
-### Step-by-Step Database Server Setup on RedHat EC2 Instance
 
-#### Step 1: Launch a RedHat EC2 Instance for the Database Server
-1. **Launch an EC2 instance**:
-   - Go to the AWS Management Console > **EC2** > **Launch Instance**.
-   - Select **Red Hat Enterprise Linux** as your Amazon Machine Image (AMI).
-   - Choose **t2.micro** for the instance type (free-tier eligible).
-   - Set the **security group**:
-     - Allow **SSH (port 22)** for your IP.
+
+####  We already Launched a RedHat EC2 Instance for the Database Server
+
+
      - Allow **MySQL (port 3306)** only for the **private IP** of the Web Server (to allow communication between them).
-   - Attach a storage volume (let's assume **8GB or more**).
+
+   - Attach a storage volume ( **10GiB or more**).
    - **Launch the instance** and connect to it via SSH:
      ```bash
      ssh -i /path/to/key.pem ec2-user@<Database-Server-Public-IP>
      ```
+     ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20ssh%20into%20the%20db%20server.PNG)
 
-#### Step 2: Configure the Database Volume
+You can Repeat the same steps as for the Web Server in configuring the one volume, partitioning and mounting, but instead of `apps-lv`, create `db-lv` and mount it to `/db` directory. You can as well just follow the steps all over again below: 
+
+####  Configure the Database Volume
 This step involves partitioning and configuring the attached storage volume.
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20create%20and%20attach%20volume%20to%20the%20db%20server.PNG)
 
 1. **List available storage volumes**:
    ```bash
    lsblk
    ```
    You should see the main volume (where the OS is installed) and the additional volume (the new one you'll use for the database).
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20listing%20availble%20volumes.PNG)
 
 2. **Partition the volume** (using `gdisk`):
    Let's assume your new volume is `/dev/nvme1n1`.
@@ -180,6 +280,7 @@ This step involves partitioning and configuring the attached storage volume.
    ```bash
    sudo gdisk /dev/nvme1n1
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20create%20a%20partition%20for%20the%20volume%20on%20db.PNG)
 
    2. Inside the `gdisk` interface:
       - Press `n` to create a **new partition**.
@@ -194,19 +295,14 @@ This step involves partitioning and configuring the attached storage volume.
 
 4. **Create a volume group**:
    ```bash
-   sudo vgcreate dbdata-vg /dev/nvme1n1p1
+   sudo vgcreate  /dev/nvme1n1p1
    ```
-
-5. **Create a logical volume** (we'll name it `db-lv`):
-   ```bash
-   sudo lvcreate -L 8G -n db-lv dbdata-vg
-   ```
-   Adjust the size (`-L 8G`) as needed.
 
 6. **Format the logical volume** as ext4:
    ```bash
-   sudo mkfs.ext4 /dev/dbdata-vg/db-lv
+   sudo mkfs.ext4 /dev/nvme1n1p1
    ```
+    ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20Format%20the%20New%20Partition.PNG)
 
 7. **Mount the logical volume** to `/db`:
    1. Create a directory to mount the volume:
@@ -216,14 +312,16 @@ This step involves partitioning and configuring the attached storage volume.
 
    2. Mount the logical volume to the `/db` directory:
    ```bash
-   sudo mount /dev/dbdata-vg/db-lv /db
+   sudo mount /dev/nvme1n1 /db
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20creating%20the%20db%20and%20mounting%20the%20partition%20to%20it.PNG)
 
 8. **Ensure the volume mounts automatically on reboot**:
    - Get the UUID of the logical volume:
    ```bash
    sudo blkid
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20getting%20the%20UUID%20of%20the%20new%20partition.PNG)
 
    - Edit the `/etc/fstab` file:
    ```bash
@@ -234,109 +332,114 @@ This step involves partitioning and configuring the attached storage volume.
    UUID=<UUID-of-db-lv> /db ext4 defaults 0 0
    ```
    Replace `<UUID-of-db-lv>` with the actual UUID obtained from the `blkid` command.
+  ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20updating%20the%20content%20of%20sudo%20vi%20etcfstab.PNG)
 
    - Save and exit the file.
 
 9. **Test the configuration**:
+``
    ```bash
    sudo mount -a
+   df -h
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20mounting%20and%20verify%20that%20mount%20works.PNG)
+
 
    This command will apply the changes and attempt to mount all filesystems listed in `/etc/fstab`. If there are any errors, the terminal will output the issue.
 
-#### Step 3: Install and Configure MySQL
-1. **Install MySQL Server**:
-   ```bash
-   sudo yum install -y mysql-server
-   ```
+## Step 3: Install WordPress on your Web Server EC2
 
-2. **Start MySQL Service**:
-   ```bash
-   sudo systemctl start mysqld
-   ```
+1. Update the repository:
 
-3. **Enable MySQL Service on Boot**:
-   ```bash
-   sudo systemctl enable mysqld
-   ```
+```bash
+sudo yum -y update
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/installing%20wordpress%20on%20web%20server.PNG)
 
-4. **Secure MySQL Installation**:
-   ```bash
-   sudo mysql_secure_installation
-   ```
+2. Install `wget`, Apache, and its dependencies:
 
-5. **Access MySQL**:
-   ```bash
-   mysql -u root -p
-   ```
+```bash
+sudo yum -y install wget httpd php php-mysqlnd php-fpm php-json
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/installing%20wordpress%20on%20web%20server.PNG)
 
+3. Start Apache:
 
-## STEP 3: INSTALL AND CONFIGURE APACHE AND PHP ON THE WEB SERVER
+```bash
+sudo systemctl enable httpd
+sudo systemctl start httpd
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/installing%20apache%20php%20and%20updating%20on%20webserver.PNG)
 
-### 3.1 Install Apache and PHP
+4. Install PHP and its dependencies:
 
-1. SSH into the **Web Server**:
-   ```bash
-   ssh -i "your-key.pem" ec2-user@<Web-Server-Public-IP>
-   ```
+```bash
+sudo yum install https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+sudo yum install yum-utils http://rpms.remirepo.net/enterprise/remi-release-8.rpm
+sudo yum module list php
+sudo yum module reset php
+sudo yum module enable php:remi-7.4
+sudo yum install php php-opcache php-gd php-curl php-mysqlnd
+sudo systemctl start php-fpm
+sudo systemctl enable php-fpm
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/installing%20apache%20php%20and%20updating%20on%20webserver.PNG)
 
-2. **Install Apache and PHP**:
-   ```bash
-   sudo yum -y update
-   sudo yum -y install httpd php php-mysqlnd
-   ```
+### Configure SELinux Policies
 
-3. **Start Apache** and enable it to start on boot:
-   ```bash
-   sudo systemctl start httpd
-   sudo systemctl enable httpd
-   ```
+```bash
+sudo chown -R apache:apache /var/www/html/wordpress
+sudo chcon -t httpd_sys_rw_content_t /var/www/html/wordpress -R
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/setting%20permission%20for%20html%20wordpress%20and%20installing%20sql.PNG)
 
-### 3.2 Download and Install WordPress
+```bash
+sudo setsebool -P httpd_can_network_connect=1
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/selium%20polciy.PNG)
 
-1. Navigate to the **Apache root directory**:
-   ```bash
-   cd /var/www/html
-   ```
+6. Restart Apache:
 
-2. Download and extract WordPress:
-   ```bash
-   sudo wget http://wordpress.org/latest.tar.gz
-   sudo tar -xzvf latest.tar.gz
-   sudo rm -f latest.tar.gz
-   ```
+```bash
+sudo systemctl restart httpd
+```
 
-3. Move WordPress to its directory and set correct permissions:
-   ```bash
-   sudo mv wordpress /var/www/html/
-   sudo chown -R apache:apache /var/www/html/wordpress
-   sudo chmod -R 755 /var/www/html/wordpress
-   ```
+7. Download WordPress and copy it to `/var/www/html`:
 
-### Screenshot
-> **[Add screenshot of Apache and WordPress installation]**
+```bash
+mkdir wordpress
+cd wordpress
+sudo wget http://wordpress.org/latest.tar.gz
+sudo tar -xzvf latest.tar.gz
+sudo rm -rf latest.tar.gz
+cp wordpress/wp-config-sample.php wordpress/wp-config.php
+cp -R wordpress /var/www/html/
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/selium%20polciy.PNG)
 
----
+## SET UP MYSQL ON THE DATABASE SERVER
 
-## STEP 4: SET UP MYSQL ON THE DATABASE SERVER
-
-### 4.1 Install MySQL
+###  Install MySQL
 
 1. SSH into the **Database Server**:
    ```bash
    ssh -i "your-key.pem" ec2-user@<DB-Server-Public-IP>
    ```
 
-2. **Install MySQL**:
+2. **Install MySQL Server**:
    ```bash
-   sudo yum -y install mysql-server
+   sudo yum install -y mysql-server
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20installing%20mysql.PNG)
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20mysql%20installed.PNG)
+
 
 3. **Start MySQL** and enable it to start on boot:
    ```bash
    sudo systemctl start mysqld
    sudo systemctl enable mysqld
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20installing%20mysql.PNG)
 
 ### 4.2 Configure MySQL for Remote Access
 
@@ -348,50 +451,55 @@ This step involves partitioning and configuring the attached storage volume.
 2. Create a **WordPress database** and user:
    ```sql
    CREATE DATABASE wordpress;
-   CREATE USER 'myuser'@'<Web-Server-Private-IP>' IDENTIFIED BY 'mypass';
+   CREATE USER 'myuser'@'<Web-Server-Private-IP>' IDENTIFIED BY 'your password';
    GRANT ALL PRIVILEGES ON wordpress.* TO 'myuser'@'<Web-Server-Private-IP>';
    FLUSH PRIVILEGES;
+   EXIT
    ```
 
-### Screenshot
-> **[Add screenshot of MySQL setup]**
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/db%20creating%20database%20and%20user%20to%20web%20server%20private%20ip.PNG)
 
 ---
 
-## STEP 5: CONNECT WORDPRESS TO THE REMOTE DATABASE
+##  Configure WordPress to Connect to Remote Database
 
-1. Test the MySQL connection from the web server:
-   ```bash
-   mysql -u myuser -p -h <DB-Server-Private-IP>
-   ```
+1. **Don't forget to Open MySQL port 3306** on the DB Server EC2.
+   - For extra security, allow access to the DB server ONLY from your Web Server's IP address.
+
+2. **Install MySQL client** on your Web Server:
+
+```bash
+sudo yum install mysql
+```
+
+3. **Test connection** from your Web Server to your DB server:
+
+```bash
+sudo mysql -u myuser -p -h <DB-Server-Private-IP-address>
+```
+![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/wb%20entering%20from%20webserver%20into%20db%20sql%20uing%20db%20ip.PNG)
+
+Verify if you can execute the `SHOW DATABASES;` command and see a list of existing databases.
 
 2. Navigate to WordPress setup via browser:
    ```bash
    http://<Web-Server-Public-IP>/wordpress
    ```
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/access%20the%20wbe%20browser%20public%20ip%20adress%20wordpress.PNG)
 
 3. Enter the MySQL database credentials:
    - Database Name: `wordpress`
    - Username: `myuser`
-   - Password: `mypass`
+   - Password: `your password`
    - Database Host: `<DB-Server-Private-IP>`
 
-### Screenshot
-> **[Add screenshot of WordPress connection setup]**
+   ![screenshot](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/setting%20up%20wordpress%20page.PNG)
+
+### If you see this message - it means your WordPress has successfully connected to your remote MySQL database
+
+![screenshot of WordPress connection](https://github.com/Prince-Tee/stegHub_wordpress/blob/main/screenshots%20from%20my%20local%20env/configuration%20worked.PNG)
 
 ---
-
-## STEP 6: COMPLETE WORDPRESS INSTALLATION
-
-Follow the instructions to complete the installation, set the site name, admin credentials, and log in to the Word
-
-Press dashboard.
-
-### Screenshot
-> **[Add screenshot of completed WordPress setup]**
-
----
-
 
 ## CONCLUSION
 
